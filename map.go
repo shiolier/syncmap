@@ -5,6 +5,8 @@
 package syncmap
 
 import (
+	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -397,4 +399,93 @@ func (e *entry[V]) tryExpungeLocked() (isExpunged bool) {
 func zeroValue[V any]() V {
 	var v V
 	return v
+}
+
+// Map returns map[K]V
+func (m *Map[K, V]) Map() map[K]V {
+	kvm := make(map[K]V)
+	m.Range(func(key K, value V) bool {
+		kvm[key] = value
+		return true
+	})
+	return kvm
+}
+
+// MarshalJSON implements json.Marshaler
+func (m *Map[K, V]) MarshalJSON() ([]byte, error) {
+	var k K
+	_, kok := any(k).(JSKeyMarshaler)
+	_, kpok := any(&k).(JSKeyMarshaler)
+	if !kok && !kpok {
+		return json.Marshal(m.Map())
+	}
+
+	svm := make(map[string]V)
+	var err error
+	m.Range(func(key K, value V) bool {
+		var (
+			kstr string
+			km   JSKeyMarshaler
+		)
+		if kok {
+			km = any(key).(JSKeyMarshaler)
+		} else { // kpok
+			km = any(&key).(JSKeyMarshaler)
+		}
+		kstr, err = km.MarshalJSKey()
+		if err != nil {
+			return false
+		}
+		if _, exists := svm[kstr]; exists {
+			err = fmt.Errorf("duplicate key: \"%s\"", kstr)
+			return false
+		}
+		svm[kstr] = value
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(svm)
+}
+
+// UnmarshalJSON implements json.Unmarshaler
+func (m *Map[K, V]) UnmarshalJSON(bs []byte) error {
+	var k K
+	if _, ok := any(&k).(JSKeyUnmarshaler); !ok {
+		kvmap := make(map[K]V)
+		if err := json.Unmarshal(bs, &kvmap); err != nil {
+			return err
+		}
+		for k, v := range kvmap {
+			m.Store(k, v)
+		}
+		return nil
+	}
+
+	strvmap := make(map[string]V)
+	if err := json.Unmarshal(bs, &strvmap); err != nil {
+		return err
+	}
+	for kstr, v := range strvmap {
+		var k K
+		kum := any(&k).(JSKeyUnmarshaler)
+		if err := kum.UnmarshalJSKey(kstr); err != nil {
+			return err
+		}
+		m.Store(k, v)
+	}
+	return nil
+}
+
+// JSKeyMarshaler is interface for type parameter K
+type JSKeyMarshaler interface {
+	// MarshalJSKey returns the json key string
+	MarshalJSKey() (string, error)
+}
+
+// JSKeyUnmarshaler is interface for type parameter K
+type JSKeyUnmarshaler interface {
+	// UnmarshalJSKey parses the json key string
+	UnmarshalJSKey(keystr string) error
 }
