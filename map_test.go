@@ -29,35 +29,32 @@ const (
 var mapOps = [...]mapOp{opLoad, opStore, opLoadOrStore, opLoadAndDelete, opDelete}
 
 // mapCall is a quick.Generator for calls on mapInterface.
-type mapCall[K comparable, V any] struct {
-	op mapOp
-	k  K
-	v  V
+type mapCall struct {
+	op   mapOp
+	k, v string
 }
 
-func (c mapCall[K, V]) apply(m mapInterface[K, V]) (V, bool) {
+func (c mapCall) apply(m mapInterface[string, string]) (string, bool) {
 	switch c.op {
 	case opLoad:
 		return m.Load(c.k)
 	case opStore:
 		m.Store(c.k, c.v)
-		var v V
-		return v, false
+		return "", false
 	case opLoadOrStore:
 		return m.LoadOrStore(c.k, c.v)
 	case opLoadAndDelete:
 		return m.LoadAndDelete(c.k)
 	case opDelete:
 		m.Delete(c.k)
-		var v V
-		return v, false
+		return "", false
 	default:
 		panic("invalid mapOp")
 	}
 }
 
-type mapResult[V any] struct {
-	value V
+type mapResult struct {
+	value string
 	ok    bool
 }
 
@@ -69,8 +66,8 @@ func randValue(r *rand.Rand) string {
 	return string(b)
 }
 
-func (mapCall[K, V]) Generate(r *rand.Rand, size int) reflect.Value {
-	c := mapCall[string, string]{op: mapOps[rand.Intn(len(mapOps))], k: randValue(r)}
+func (mapCall) Generate(r *rand.Rand, size int) reflect.Value {
+	c := mapCall{op: mapOps[rand.Intn(len(mapOps))], k: randValue(r)}
 	switch c.op {
 	case opStore, opLoadOrStore:
 		c.v = randValue(r)
@@ -78,14 +75,14 @@ func (mapCall[K, V]) Generate(r *rand.Rand, size int) reflect.Value {
 	return reflect.ValueOf(c)
 }
 
-func applyCalls[K comparable, V any](m mapInterface[K, V], calls []mapCall[K, V]) (results []mapResult[V], final map[K]V) {
+func applyCalls(m mapInterface[string, string], calls []mapCall) (results []mapResult, final map[string]string) {
 	for _, c := range calls {
 		v, ok := c.apply(m)
-		results = append(results, mapResult[V]{v, ok})
+		results = append(results, mapResult{v, ok})
 	}
 
-	final = make(map[K]V)
-	m.Range(func(k K, v V) bool {
+	final = make(map[string]string)
+	m.Range(func(k string, v string) bool {
 		final[k] = v
 		return true
 	})
@@ -93,12 +90,12 @@ func applyCalls[K comparable, V any](m mapInterface[K, V], calls []mapCall[K, V]
 	return results, final
 }
 
-func applyMap[K comparable, V any](calls []mapCall[K, V]) ([]mapResult[V], map[K]V) {
-	return applyCalls[K, V](new(syncmap.Map[K, V]), calls)
+func applyMap[K comparable, V any](calls []mapCall) ([]mapResult, map[string]string) {
+	return applyCalls(new(syncmap.Map[string, string]), calls)
 }
 
-func applyWrapperMap[K comparable, V any](calls []mapCall[K, V]) ([]mapResult[V], map[K]V) {
-	return applyCalls[K, V](new(WrapperMap[K, V]), calls)
+func applyWrapperMap[K comparable, V any](calls []mapCall) ([]mapResult, map[string]string) {
+	return applyCalls(new(WrapperMap[string, string]), calls)
 }
 
 func TestMapMatchesWrapperMap(t *testing.T) {
