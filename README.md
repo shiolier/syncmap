@@ -167,3 +167,39 @@ smap.Range(func(key MyKey, value MyValue) bool {
 	{333 GHI:JKL}: {444 MNO}
 */
 ```
+
+## Benchmark
+
+Compare with WrapperMap[K, V] that is sync.Map wrapped with generics
+
+Use [int, int] for type parameters [K, V]
+
+    goos: darwin
+    goarch: amd64
+    pkg: github.com/shiolier/syncmap
+    cpu: Intel(R) Core(TM) i5-3210M CPU @ 2.50GHz
+    BenchmarkLoadMostlyHits/*WrapperMap           51769129       23.38 ns/op        0 B/op        0 allocs/op
+    BenchmarkLoadMostlyHits/*Map                  49294209       23.71 ns/op        0 B/op        0 allocs/op
+    BenchmarkLoadMostlyMisses/*WrapperMap         86073642       13.97 ns/op        0 B/op        0 allocs/op
+    BenchmarkLoadMostlyMisses/*Map                54911031       22.43 ns/op        0 B/op        0 allocs/op
+    BenchmarkLoadOrStoreBalanced/*WrapperMap       1775521       673.9 ns/op       93 B/op        2 allocs/op
+    BenchmarkLoadOrStoreBalanced/*Map              3079636       326.9 ns/op       36 B/op        1 allocs/op
+    BenchmarkLoadOrStoreUnique/*WrapperMap         1000000        1168 ns/op      163 B/op        4 allocs/op
+    BenchmarkLoadOrStoreUnique/*Map                1765795       645.7 ns/op      113 B/op        2 allocs/op
+    BenchmarkLoadOrStoreCollision/*WrapperMap     55630494       20.86 ns/op        0 B/op        0 allocs/op
+    BenchmarkLoadOrStoreCollision/*Map            48463934       24.44 ns/op        0 B/op        0 allocs/op
+    BenchmarkLoadAndDeleteBalanced/*WrapperMap    56891140       20.51 ns/op        0 B/op        0 allocs/op
+    BenchmarkLoadAndDeleteBalanced/*Map           48169279       25.21 ns/op        0 B/op        0 allocs/op
+    BenchmarkLoadAndDeleteUnique/*WrapperMap     124337067       9.726 ns/op        0 B/op        0 allocs/op
+    BenchmarkLoadAndDeleteUnique/*Map             60827192       19.44 ns/op        0 B/op        0 allocs/op
+    BenchmarkLoadAndDeleteCollision/*WrapperMap  121662361       9.720 ns/op        0 B/op        0 allocs/op
+    BenchmarkLoadAndDeleteCollision/*Map          59067524       19.58 ns/op        0 B/op        0 allocs/op
+    BenchmarkRange/*WrapperMap                      114358       10445 ns/op        0 B/op        0 allocs/op
+    BenchmarkRange/*Map                              50613       23094 ns/op        0 B/op        0 allocs/op
+    BenchmarkAdversarialAlloc/*WrapperMap          3588988       345.7 ns/op       39 B/op        0 allocs/op
+    BenchmarkAdversarialAlloc/*Map                 4619600       268.7 ns/op       26 B/op        0 allocs/op
+    BenchmarkAdversarialDelete/*WrapperMap         9616904       138.1 ns/op       17 B/op        0 allocs/op
+    BenchmarkAdversarialDelete/*Map               12149572       101.3 ns/op       10 B/op        0 allocs/op
+    BenchmarkDeleteCollision/*WrapperMap         100000000       11.41 ns/op        0 B/op        0 allocs/op
+    BenchmarkDeleteCollision/*Map                 57604394       21.07 ns/op        0 B/op        0 allocs/op
+
