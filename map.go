@@ -60,6 +60,14 @@ type Map[K comparable, V any] struct {
 	misses int
 }
 
+func NewMap[K comparable, V any](m map[K]V) (smap *Map[K, V]) {
+	smap = new(Map[K, V])
+	for k, v := range m {
+		smap.Store(k, v)
+	}
+	return
+}
+
 // readOnly is an immutable struct stored atomically in the Map.read field.
 type readOnly[K comparable, V any] struct {
 	m       map[K]*entry[V]
