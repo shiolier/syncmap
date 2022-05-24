@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package sync
+package syncmap
 
 import (
+	"sync"
 	"sync/atomic"
 	"unsafe"
 )
@@ -24,8 +25,8 @@ import (
 // contention compared to a Go map paired with a separate Mutex or RWMutex.
 //
 // The zero Map is empty and ready for use. A Map must not be copied after first use.
-type Map struct {
-	mu Mutex
+type Map[K comparable, V any] struct {
+	mu sync.Mutex
 
 	// read contains the portion of the map's contents that are safe for
 	// concurrent access (with or without mu held).
@@ -48,7 +49,7 @@ type Map struct {
 	//
 	// If the dirty map is nil, the next write to the map will initialize it by
 	// making a shallow copy of the clean map, omitting stale entries.
-	dirty map[any]*entry
+	dirty map[K]*entry[V]
 
 	// misses counts the number of loads since the read map was last updated that
 	// needed to lock mu to determine whether the key was present.
@@ -60,8 +61,8 @@ type Map struct {
 }
 
 // readOnly is an immutable struct stored atomically in the Map.read field.
-type readOnly struct {
-	m       map[any]*entry
+type readOnly[K comparable, V any] struct {
+	m       map[K]*entry[V]
 	amended bool // true if the dirty map contains some key not in m.
 }
 
@@ -70,7 +71,7 @@ type readOnly struct {
 var expunged = unsafe.Pointer(new(any))
 
 // An entry is a slot in the map corresponding to a particular key.
-type entry struct {
+type entry[V any] struct {
 	// p points to the interface{} value stored for the entry.
 	//
 	// If p == nil, the entry has been deleted, and either m.dirty == nil or
@@ -93,22 +94,22 @@ type entry struct {
 	p unsafe.Pointer // *interface{}
 }
 
-func newEntry(i any) *entry {
-	return &entry{p: unsafe.Pointer(&i)}
+func newEntry[V any](v V) *entry[V] {
+	return &entry[V]{p: unsafe.Pointer(&v)}
 }
 
 // Load returns the value stored in the map for a key, or nil if no
 // value is present.
 // The ok result indicates whether value was found in the map.
-func (m *Map) Load(key any) (value any, ok bool) {
-	read, _ := m.read.Load().(readOnly)
+func (m *Map[K, V]) Load(key K) (value V, ok bool) {
+	read, _ := m.read.Load().(readOnly[K, V])
 	e, ok := read.m[key]
 	if !ok && read.amended {
 		m.mu.Lock()
 		// Avoid reporting a spurious miss if m.dirty got promoted while we were
 		// blocked on m.mu. (If further loads of the same key will not miss, it's
 		// not worth copying the dirty map for this key.)
-		read, _ = m.read.Load().(readOnly)
+		read, _ = m.read.Load().(readOnly[K, V])
 		e, ok = read.m[key]
 		if !ok && read.amended {
 			e, ok = m.dirty[key]
@@ -120,28 +121,28 @@ func (m *Map) Load(key any) (value any, ok bool) {
 		m.mu.Unlock()
 	}
 	if !ok {
-		return nil, false
+		return zeroValue[V](), false
 	}
 	return e.load()
 }
 
-func (e *entry) load() (value any, ok bool) {
+func (e *entry[V]) load() (value V, ok bool) {
 	p := atomic.LoadPointer(&e.p)
 	if p == nil || p == expunged {
-		return nil, false
+		return zeroValue[V](), false
 	}
-	return *(*any)(p), true
+	return *(*V)(p), true
 }
 
 // Store sets the value for a key.
-func (m *Map) Store(key, value any) {
-	read, _ := m.read.Load().(readOnly)
+func (m *Map[K, V]) Store(key K, value V) {
+	read, _ := m.read.Load().(readOnly[K, V])
 	if e, ok := read.m[key]; ok && e.tryStore(&value) {
 		return
 	}
 
 	m.mu.Lock()
-	read, _ = m.read.Load().(readOnly)
+	read, _ = m.read.Load().(readOnly[K, V])
 	if e, ok := read.m[key]; ok {
 		if e.unexpungeLocked() {
 			// The entry was previously expunged, which implies that there is a
@@ -156,7 +157,7 @@ func (m *Map) Store(key, value any) {
 			// We're adding the first new key to the dirty map.
 			// Make sure it is allocated and mark the read-only map as incomplete.
 			m.dirtyLocked()
-			m.read.Store(readOnly{m: read.m, amended: true})
+			m.read.Store(readOnly[K, V]{m: read.m, amended: true})
 		}
 		m.dirty[key] = newEntry(value)
 	}
@@ -167,13 +168,13 @@ func (m *Map) Store(key, value any) {
 //
 // If the entry is expunged, tryStore returns false and leaves the entry
 // unchanged.
-func (e *entry) tryStore(i *any) bool {
+func (e *entry[V]) tryStore(v *V) bool {
 	for {
 		p := atomic.LoadPointer(&e.p)
 		if p == expunged {
 			return false
 		}
-		if atomic.CompareAndSwapPointer(&e.p, p, unsafe.Pointer(i)) {
+		if atomic.CompareAndSwapPointer(&e.p, p, unsafe.Pointer(v)) {
 			return true
 		}
 	}
@@ -183,23 +184,23 @@ func (e *entry) tryStore(i *any) bool {
 //
 // If the entry was previously expunged, it must be added to the dirty map
 // before m.mu is unlocked.
-func (e *entry) unexpungeLocked() (wasExpunged bool) {
+func (e *entry[V]) unexpungeLocked() (wasExpunged bool) {
 	return atomic.CompareAndSwapPointer(&e.p, expunged, nil)
 }
 
 // storeLocked unconditionally stores a value to the entry.
 //
 // The entry must be known not to be expunged.
-func (e *entry) storeLocked(i *any) {
-	atomic.StorePointer(&e.p, unsafe.Pointer(i))
+func (e *entry[V]) storeLocked(v *V) {
+	atomic.StorePointer(&e.p, unsafe.Pointer(v))
 }
 
 // LoadOrStore returns the existing value for the key if present.
 // Otherwise, it stores and returns the given value.
 // The loaded result is true if the value was loaded, false if stored.
-func (m *Map) LoadOrStore(key, value any) (actual any, loaded bool) {
+func (m *Map[K, V]) LoadOrStore(key K, value V) (actual V, loaded bool) {
 	// Avoid locking if it's a clean hit.
-	read, _ := m.read.Load().(readOnly)
+	read, _ := m.read.Load().(readOnly[K, V])
 	if e, ok := read.m[key]; ok {
 		actual, loaded, ok := e.tryLoadOrStore(value)
 		if ok {
@@ -208,7 +209,7 @@ func (m *Map) LoadOrStore(key, value any) (actual any, loaded bool) {
 	}
 
 	m.mu.Lock()
-	read, _ = m.read.Load().(readOnly)
+	read, _ = m.read.Load().(readOnly[K, V])
 	if e, ok := read.m[key]; ok {
 		if e.unexpungeLocked() {
 			m.dirty[key] = e
@@ -222,7 +223,7 @@ func (m *Map) LoadOrStore(key, value any) (actual any, loaded bool) {
 			// We're adding the first new key to the dirty map.
 			// Make sure it is allocated and mark the read-only map as incomplete.
 			m.dirtyLocked()
-			m.read.Store(readOnly{m: read.m, amended: true})
+			m.read.Store(readOnly[K, V]{m: read.m, amended: true})
 		}
 		m.dirty[key] = newEntry(value)
 		actual, loaded = value, false
@@ -237,41 +238,41 @@ func (m *Map) LoadOrStore(key, value any) (actual any, loaded bool) {
 //
 // If the entry is expunged, tryLoadOrStore leaves the entry unchanged and
 // returns with ok==false.
-func (e *entry) tryLoadOrStore(i any) (actual any, loaded, ok bool) {
+func (e *entry[V]) tryLoadOrStore(v V) (actual V, loaded, ok bool) {
 	p := atomic.LoadPointer(&e.p)
 	if p == expunged {
-		return nil, false, false
+		return zeroValue[V](), false, false
 	}
 	if p != nil {
-		return *(*any)(p), true, true
+		return *(*V)(p), true, true
 	}
 
 	// Copy the interface after the first load to make this method more amenable
 	// to escape analysis: if we hit the "load" path or the entry is expunged, we
 	// shouldn't bother heap-allocating.
-	ic := i
+	vc := v
 	for {
-		if atomic.CompareAndSwapPointer(&e.p, nil, unsafe.Pointer(&ic)) {
-			return i, false, true
+		if atomic.CompareAndSwapPointer(&e.p, nil, unsafe.Pointer(&vc)) {
+			return v, false, true
 		}
 		p = atomic.LoadPointer(&e.p)
 		if p == expunged {
-			return nil, false, false
+			return zeroValue[V](), false, false
 		}
 		if p != nil {
-			return *(*any)(p), true, true
+			return *(*V)(p), true, true
 		}
 	}
 }
 
 // LoadAndDelete deletes the value for a key, returning the previous value if any.
 // The loaded result reports whether the key was present.
-func (m *Map) LoadAndDelete(key any) (value any, loaded bool) {
-	read, _ := m.read.Load().(readOnly)
+func (m *Map[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
+	read, _ := m.read.Load().(readOnly[K, V])
 	e, ok := read.m[key]
 	if !ok && read.amended {
 		m.mu.Lock()
-		read, _ = m.read.Load().(readOnly)
+		read, _ = m.read.Load().(readOnly[K, V])
 		e, ok = read.m[key]
 		if !ok && read.amended {
 			e, ok = m.dirty[key]
@@ -286,22 +287,22 @@ func (m *Map) LoadAndDelete(key any) (value any, loaded bool) {
 	if ok {
 		return e.delete()
 	}
-	return nil, false
+	return zeroValue[V](), false
 }
 
 // Delete deletes the value for a key.
-func (m *Map) Delete(key any) {
+func (m *Map[K, V]) Delete(key K) {
 	m.LoadAndDelete(key)
 }
 
-func (e *entry) delete() (value any, ok bool) {
+func (e *entry[V]) delete() (value V, ok bool) {
 	for {
 		p := atomic.LoadPointer(&e.p)
 		if p == nil || p == expunged {
-			return nil, false
+			return zeroValue[V](), false
 		}
 		if atomic.CompareAndSwapPointer(&e.p, p, nil) {
-			return *(*any)(p), true
+			return *(*V)(p), true
 		}
 	}
 }
@@ -317,21 +318,21 @@ func (e *entry) delete() (value any, ok bool) {
 //
 // Range may be O(N) with the number of elements in the map even if f returns
 // false after a constant number of calls.
-func (m *Map) Range(f func(key, value any) bool) {
+func (m *Map[K, V]) Range(f func(key K, value V) bool) {
 	// We need to be able to iterate over all of the keys that were already
 	// present at the start of the call to Range.
 	// If read.amended is false, then read.m satisfies that property without
 	// requiring us to hold m.mu for a long time.
-	read, _ := m.read.Load().(readOnly)
+	read, _ := m.read.Load().(readOnly[K, V])
 	if read.amended {
 		// m.dirty contains keys not in read.m. Fortunately, Range is already O(N)
 		// (assuming the caller does not break out early), so a call to Range
 		// amortizes an entire copy of the map: we can promote the dirty copy
 		// immediately!
 		m.mu.Lock()
-		read, _ = m.read.Load().(readOnly)
+		read, _ = m.read.Load().(readOnly[K, V])
 		if read.amended {
-			read = readOnly{m: m.dirty}
+			read = readOnly[K, V]{m: m.dirty}
 			m.read.Store(read)
 			m.dirty = nil
 			m.misses = 0
@@ -350,23 +351,23 @@ func (m *Map) Range(f func(key, value any) bool) {
 	}
 }
 
-func (m *Map) missLocked() {
+func (m *Map[K, V]) missLocked() {
 	m.misses++
 	if m.misses < len(m.dirty) {
 		return
 	}
-	m.read.Store(readOnly{m: m.dirty})
+	m.read.Store(readOnly[K, V]{m: m.dirty})
 	m.dirty = nil
 	m.misses = 0
 }
 
-func (m *Map) dirtyLocked() {
+func (m *Map[K, V]) dirtyLocked() {
 	if m.dirty != nil {
 		return
 	}
 
-	read, _ := m.read.Load().(readOnly)
-	m.dirty = make(map[any]*entry, len(read.m))
+	read, _ := m.read.Load().(readOnly[K, V])
+	m.dirty = make(map[K]*entry[V], len(read.m))
 	for k, e := range read.m {
 		if !e.tryExpungeLocked() {
 			m.dirty[k] = e
@@ -374,7 +375,7 @@ func (m *Map) dirtyLocked() {
 	}
 }
 
-func (e *entry) tryExpungeLocked() (isExpunged bool) {
+func (e *entry[V]) tryExpungeLocked() (isExpunged bool) {
 	p := atomic.LoadPointer(&e.p)
 	for p == nil {
 		if atomic.CompareAndSwapPointer(&e.p, nil, expunged) {
@@ -383,4 +384,9 @@ func (e *entry) tryExpungeLocked() (isExpunged bool) {
 		p = atomic.LoadPointer(&e.p)
 	}
 	return p == expunged
+}
+
+func zeroValue[V any]() V {
+	var v V
+	return v
 }
