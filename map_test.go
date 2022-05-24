@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package sync_test
+package syncmap_test
 
 import (
 	"math/rand"
@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/quick"
+
+	"github.com/shiolier/syncmap"
 )
 
 type mapOp string
@@ -27,36 +29,39 @@ const (
 var mapOps = [...]mapOp{opLoad, opStore, opLoadOrStore, opLoadAndDelete, opDelete}
 
 // mapCall is a quick.Generator for calls on mapInterface.
-type mapCall struct {
-	op   mapOp
-	k, v any
+type mapCall[K comparable, V any] struct {
+	op mapOp
+	k  K
+	v  V
 }
 
-func (c mapCall) apply(m mapInterface) (any, bool) {
+func (c mapCall[K, V]) apply(m mapInterface[K, V]) (V, bool) {
 	switch c.op {
 	case opLoad:
 		return m.Load(c.k)
 	case opStore:
 		m.Store(c.k, c.v)
-		return nil, false
+		var v V
+		return v, false
 	case opLoadOrStore:
 		return m.LoadOrStore(c.k, c.v)
 	case opLoadAndDelete:
 		return m.LoadAndDelete(c.k)
 	case opDelete:
 		m.Delete(c.k)
-		return nil, false
+		var v V
+		return v, false
 	default:
 		panic("invalid mapOp")
 	}
 }
 
-type mapResult struct {
-	value any
+type mapResult[V any] struct {
+	value V
 	ok    bool
 }
 
-func randValue(r *rand.Rand) any {
+func randValue(r *rand.Rand) string {
 	b := make([]byte, r.Intn(4))
 	for i := range b {
 		b[i] = 'a' + byte(rand.Intn(26))
@@ -64,8 +69,8 @@ func randValue(r *rand.Rand) any {
 	return string(b)
 }
 
-func (mapCall) Generate(r *rand.Rand, size int) reflect.Value {
-	c := mapCall{op: mapOps[rand.Intn(len(mapOps))], k: randValue(r)}
+func (mapCall[K, V]) Generate(r *rand.Rand, size int) reflect.Value {
+	c := mapCall[string, string]{op: mapOps[rand.Intn(len(mapOps))], k: randValue(r)}
 	switch c.op {
 	case opStore, opLoadOrStore:
 		c.v = randValue(r)
@@ -73,14 +78,14 @@ func (mapCall) Generate(r *rand.Rand, size int) reflect.Value {
 	return reflect.ValueOf(c)
 }
 
-func applyCalls(m mapInterface, calls []mapCall) (results []mapResult, final map[any]any) {
+func applyCalls[K comparable, V any](m mapInterface[K, V], calls []mapCall[K, V]) (results []mapResult[V], final map[K]V) {
 	for _, c := range calls {
 		v, ok := c.apply(m)
-		results = append(results, mapResult{v, ok})
+		results = append(results, mapResult[V]{v, ok})
 	}
 
-	final = make(map[any]any)
-	m.Range(func(k, v any) bool {
+	final = make(map[K]V)
+	m.Range(func(k K, v V) bool {
 		final[k] = v
 		return true
 	})
@@ -88,26 +93,16 @@ func applyCalls(m mapInterface, calls []mapCall) (results []mapResult, final map
 	return results, final
 }
 
-func applyMap(calls []mapCall) ([]mapResult, map[any]any) {
-	return applyCalls(new(sync.Map), calls)
+func applyMap[K comparable, V any](calls []mapCall[K, V]) ([]mapResult[V], map[K]V) {
+	return applyCalls[K, V](new(syncmap.Map[K, V]), calls)
 }
 
-func applyRWMutexMap(calls []mapCall) ([]mapResult, map[any]any) {
-	return applyCalls(new(RWMutexMap), calls)
+func applyWrapperMap[K comparable, V any](calls []mapCall[K, V]) ([]mapResult[V], map[K]V) {
+	return applyCalls[K, V](new(WrapperMap[K, V]), calls)
 }
 
-func applyDeepCopyMap(calls []mapCall) ([]mapResult, map[any]any) {
-	return applyCalls(new(DeepCopyMap), calls)
-}
-
-func TestMapMatchesRWMutex(t *testing.T) {
-	if err := quick.CheckEqual(applyMap, applyRWMutexMap, nil); err != nil {
-		t.Error(err)
-	}
-}
-
-func TestMapMatchesDeepCopy(t *testing.T) {
-	if err := quick.CheckEqual(applyMap, applyDeepCopyMap, nil); err != nil {
+func TestMapMatchesWrapperMap(t *testing.T) {
+	if err := quick.CheckEqual(applyMap[string, string], applyWrapperMap[string, string], nil); err != nil {
 		t.Error(err)
 	}
 }
