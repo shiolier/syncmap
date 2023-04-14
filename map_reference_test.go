@@ -4,7 +4,9 @@
 
 package syncmap_test
 
-import "sync"
+import (
+	"sync"
+)
 
 // This file contains reference map implementations for unit-tests.
 
@@ -15,6 +17,7 @@ type mapInterface[K comparable, V any] interface {
 	LoadOrStore(key K, value V) (actual V, loaded bool)
 	LoadAndDelete(key K) (value V, loaded bool)
 	Delete(K)
+	Swap(K, V) (previous V, loaded bool)
 	Range(func(key K, value V) (shouldContinue bool))
 }
 
@@ -53,6 +56,15 @@ func (m *WrapperMap[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
 
 func (m *WrapperMap[K, V]) Delete(key K) {
 	m.m.Delete(key)
+}
+
+func (m *WrapperMap[K, V]) Swap(key K, value V) (previous V, loaded bool) {
+	previousany, loaded := m.m.Swap(key, value)
+	if !loaded {
+		return
+	}
+	previous = previousany.(V)
+	return
 }
 
 func (m *WrapperMap[K, V]) Range(f func(key K, value V) bool) {

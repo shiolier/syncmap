@@ -24,9 +24,10 @@ const (
 	opLoadOrStore   = mapOp("LoadOrStore")
 	opLoadAndDelete = mapOp("LoadAndDelete")
 	opDelete        = mapOp("Delete")
+	opSwap          = mapOp("Swap")
 )
 
-var mapOps = [...]mapOp{opLoad, opStore, opLoadOrStore, opLoadAndDelete, opDelete}
+var mapOps = [...]mapOp{opLoad, opStore, opLoadOrStore, opLoadAndDelete, opDelete, opSwap}
 
 // mapCall is a quick.Generator for calls on mapInterface.
 type mapCall struct {
@@ -48,6 +49,8 @@ func (c mapCall) apply(m mapInterface[string, string]) (string, bool) {
 	case opDelete:
 		m.Delete(c.k)
 		return "", false
+	case opSwap:
+		return m.Swap(c.k, c.v)
 	default:
 		panic("invalid mapOp")
 	}
